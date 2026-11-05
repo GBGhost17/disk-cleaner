@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "targets": [
+    {
+      "id": "user_temp",
+      "path": "%TEMP%",
+      "category": "temp",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "Thư mục tạm người dùng, xóa an toàn"
+    },
+    {
+      "id": "windows_temp",
+      "path": "C:\\Windows\\Temp",
+      "category": "temp",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "Temp hệ thống, một số tệp đang dùng sẽ bỏ qua"
+    },
+    {
+      "id": "chrome_cache",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Cache",
+      "category": "browser_cache",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "Cache Chrome, tự tạo lại"
+    },
+    {
+      "id": "edge_cache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\Cache",
+      "category": "browser_cache",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "Cache Edge, tự tạo lại"
+    },
+    {
+      "id": "winsxs_cleanup",
+      "path": "C:\\Windows\\WinSxS",
+      "category": "system",
+      "safety": "caution",
+      "action": "dism_cleanup",
+      "note": "Chỉ dọn qua DISM StartComponentCleanup, không xóa thủ công"
+    },
+    {
+      "id": "software_distribution",
+      "path": "C:\\Windows\\SoftwareDistribution\\Download",
+      "category": "system",
+      "safety": "caution",
+      "action": "manual_review",
+      "note": "Cần dừng Windows Update trước khi xóa"
+    },
+    {
+      "id": "windows_system32",
+      "path": "C:\\Windows\\System32",
+      "category": "system",
+      "safety": "dangerous",
+      "action": "never_touch",
+      "note": "Thành phần cốt lõi, không bao giờ xóa"
+    },
+    {
+      "id": "windows_installer",
+      "path": "C:\\Windows\\Installer",
+      "category": "system",
+      "safety": "dangerous",
+      "action": "never_touch",
+      "note": "Bộ cài phần mềm, không xóa thủ công"
+    },
+    {
+      "id": "program_files",
+      "path": "C:\\Program Files",
+      "category": "system",
+      "safety": "dangerous",
+      "action": "never_touch",
+      "note": "Chỉ gỡ qua Settings, không xóa thư mục"
+    },
+    {
+      "id": "program_files_x86",
+      "path": "C:\\Program Files (x86)",
+      "category": "system",
+      "safety": "dangerous",
+      "action": "never_touch",
+      "note": "Chỉ gỡ qua Settings, không xóa thư mục"
+    },
+    {
+      "id": "windows_folder",
+      "path": "C:\\Windows",
+      "category": "system",
+      "safety": "dangerous",
+      "action": "never_touch",
+      "note": "Thư mục hệ thống, không xóa thủ công"
+    },
+    {
+      "id": "program_data",
+      "path": "C:\\ProgramData",
+      "category": "system",
+      "safety": "dangerous",
+      "action": "never_touch",
+      "note": "Dữ liệu ứng dụng, không xóa thủ công"
+    }
+  ]
+}
