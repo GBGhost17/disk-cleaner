@@ -1,15 +1,11 @@
 """
 Giao diện đồ họa cho disk-cleaner, dùng Tkinter.
-Chia sẻ cùng lõi core với CLI.
-
-Quy tắc checkbox:
-- Chỉ tick được khi: safety == safe VÀ action là delete_contents/delete_folder.
-- Tick sẵn nếu thêm điều kiện reclaimable > 0.
-- caution / dangerous: checkbox disabled (hiển thị —).
+Đã sửa lỗi đơ GUI bằng cách dùng Thread cho các tác vụ nặng.
 """
 from __future__ import annotations
 
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -22,28 +18,54 @@ from core.logger import get_logger, log_action_results, log_scan_results
 from core.models import Action, Safety, Target
 from core.scanner import ScanResult, scan_targets, summarize
 
-
-CHECKED = "☑"
-UNCHECKED = "☐"
-DISABLED = "—"
+# Import các giá trị tĩnh
+from .constants import (
+    CHECKED, UNCHECKED, DISABLED, 
+    WINDOW_TITLE, WINDOW_GEOMETRY, WINDOW_MIN_SIZE,
+    TREE_COLUMNS, COLOR_CAUTION, COLOR_DANGEROUS, COLOR_RECLAIMABLE_BG
+)
+from .help_text import HELP_CONTENT
 
 
 class DiskCleanerGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Disk Cleaner")
-        self.root.geometry("1100x750")
+        self.root.title(WINDOW_TITLE)
+        self.root.geometry(WINDOW_GEOMETRY)
+        self.root.minsize(*WINDOW_MIN_SIZE)
 
         self.logger = get_logger()
         self.targets: list[Target] = []
         self.scan_results: dict[str, ScanResult] = {}
         self.checked: set[str] = set()
+        self.last_action_results: list[ActionResult] = []
+        self.last_action_dry_run: bool = True
+
+        self._thread_running = False
+        self._thread_result = None
+        self._thread_error = None
 
         self._build_ui()
 
     def _build_ui(self) -> None:
-        toolbar = ttk.Frame(self.root, padding=6)
-        toolbar.pack(fill=tk.X)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
+        self.main_tab = ttk.Frame(self.notebook)
+        self.help_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.main_tab, text="Cleaner")
+        self.notebook.add(self.help_tab, text="Help")
+
+        self._build_main_tab()
+        self._build_help_tab()
+
+    def _build_main_tab(self) -> None:
+        self.main_tab.rowconfigure(1, weight=1)
+        self.main_tab.columnconfigure(0, weight=1)
+
+        # Toolbar
+        toolbar = ttk.Frame(self.main_tab, padding=6)
+        toolbar.grid(row=0, column=0, sticky="ew")
 
         ttk.Button(toolbar, text="Scan", command=self.on_scan).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Chọn tất cả", command=self.on_select_all).pack(side=tk.LEFT, padx=2)
@@ -52,271 +74,319 @@ class DiskCleanerGUI:
         ttk.Button(toolbar, text="Clean (Dry-run)", command=self.on_clean_dry).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Clean (Execute)", command=self.on_clean_execute).pack(side=tk.LEFT, padx=2)
 
-        columns = ("check", "id", "total", "reclaim", "files", "safety", "action", "note")
-        self.tree = ttk.Treeview(self.root, columns=columns, show="headings", height=20)
-        headings = {
-            "check": ("Chọn", 60),
-            "id": ("ID", 200),
-            "total": ("Total", 90),
-            "reclaim": ("Reclaimable", 100),
-            "files": ("Files", 70),
-            "safety": ("Safety", 80),
-            "action": ("Action", 120),
-            "note": ("Ghi chú", 260),
-        }
-        for col, (text, width) in headings.items():
-            self.tree.heading(col, text=text)
-            self.tree.column(col, width=width, anchor=tk.W)
+        # Treeview
+        tree_frame = ttk.Frame(self.main_tab)
+        tree_frame.grid(row=1, column=0, sticky="nsew", padx=6, pady=4)
+        
+        cols = [c[0] for c in TREE_COLUMNS]
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=10)
+        
+        for col_id, title, width in TREE_COLUMNS:
+            self.tree.heading(col_id, text=title)
+            self.tree.column(col_id, width=width, anchor=tk.W)
 
-        self.tree.tag_configure("caution", foreground="#888888")
-        self.tree.tag_configure("dangerous", foreground="#cc0000")
-        self.tree.tag_configure("reclaimable", background="#f0fff0")
-
+        self.tree.tag_configure("caution", foreground=COLOR_CAUTION)
+        self.tree.tag_configure("dangerous", foreground=COLOR_DANGEROUS)
+        self.tree.tag_configure("reclaimable", background=COLOR_RECLAIMABLE_BG)
         self.tree.bind("<Button-1>", self.on_tree_click)
 
-        vsb = ttk.Scrollbar(self.root, orient="vertical", command=self.tree.yview)
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
-        self.tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6)
-        vsb.place(in_=self.tree, relx=1.0, rely=0.0, relheight=1.0, anchor="ne")
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Bottom Bar
+        bottom_frame = ttk.Frame(self.main_tab)
+        bottom_frame.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 6))
+
+        self.log_line_var = tk.StringVar(value="Sẵn sàng.")
+        ttk.Label(bottom_frame, textvariable=self.log_line_var, anchor=tk.W).pack(
+            side=tk.LEFT, fill=tk.X, expand=True
+        )
+        self.detail_btn = ttk.Button(
+            bottom_frame, text="Xem chi tiết", command=self.on_show_details, state=tk.DISABLED
+        )
+        self.detail_btn.pack(side=tk.RIGHT)
+
+        # Status Bar
         self.status_var = tk.StringVar(value="Nhấn Scan để bắt đầu.")
-        ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(
-            fill=tk.X, side=tk.BOTTOM
+        ttk.Label(self.main_tab, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).grid(
+            row=3, column=0, sticky="ew"
         )
 
-        log_frame = ttk.LabelFrame(self.root, text="Log", padding=4)
-        log_frame.pack(fill=tk.BOTH, side=tk.BOTTOM, padx=6, pady=4)
-        self.log_text = tk.Text(log_frame, height=10, wrap=tk.WORD, state=tk.DISABLED)
-        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+    def _build_help_tab(self) -> None:
+        text = tk.Text(self.help_tab, wrap=tk.WORD, padx=12, pady=12)
+        scroll = ttk.Scrollbar(self.help_tab, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Lấy text từ module help_text
+        text.insert("1.0", HELP_CONTENT)
+        text.configure(state=tk.DISABLED)
 
     # ---------- Helpers ----------
-
     def _fmt_gb(self, n_bytes: int) -> str:
         return f"{n_bytes / (1024 ** 3):.2f} GB"
 
-    def _append_log(self, message: str) -> None:
-        self.log_text.configure(state=tk.NORMAL)
-        self.log_text.insert(tk.END, message + "\n")
-        self.log_text.see(tk.END)
-        self.log_text.configure(state=tk.DISABLED)
+    def _set_log_line(self, message: str) -> None:
+        self.log_line_var.set(message)
 
     def _can_check(self, target: Target) -> bool:
-        """Chỉ safe + action xóa được mới cho tick."""
-        if target.safety != Safety.SAFE:
-            return False
-        if target.action not in (Action.DELETE_CONTENTS, Action.DELETE_FOLDER):
-            return False
-        return True
+        return target.safety == Safety.SAFE and target.action in (Action.DELETE_CONTENTS, Action.DELETE_FOLDER)
 
     def _is_actionable(self, target: Target, result: ScanResult | None) -> bool:
-        """Có thể tick sẵn: đủ điều kiện tick + có dữ liệu để xóa."""
-        if not self._can_check(target):
-            return False
-        if result is None:
-            return False
-        return result.estimated_reclaimable > 0
+        return self._can_check(target) and result is not None and result.estimated_reclaimable > 0
 
-    # ---------- Scan ----------
+    def _set_busy(self, busy: bool, status: str | None = None) -> None:
+        self._thread_running = busy
+        self.root.configure(cursor="watch" if busy else "")
+        if status:
+            self.status_var.set(status)
 
-    def on_scan(self) -> None:
-        self.status_var.set("Đang quét...")
-        self.root.update_idletasks()
-
-        self.tree.delete(*self.tree.get_children())
-        self.scan_results.clear()
-        self.checked.clear()
-
-        targets, skipped = load_targets(only_valid=True)
-
-        # Chặn duplicate id ở tầng dữ liệu
-        seen_ids: set[str] = set()
-        unique_targets: list[Target] = []
-        for t in targets:
-            if t.id in seen_ids:
-                self._append_log(f"CẢNH BÁO: trùng id '{t.id}', bỏ qua mục thứ hai.")
-                continue
-            seen_ids.add(t.id)
-            unique_targets.append(t)
-
-        self.targets = unique_targets
-
-        if not self.targets:
-            self.status_var.set("Không có target hợp lệ nào.")
-            self._append_log("Không có target hợp lệ nào. Kiểm tra config/targets.*.json")
+    def _run_background(self, worker, on_done, busy_text: str) -> None:
+        if self._thread_running:
+            messagebox.showinfo("Đang xử lý", "Tác vụ trước đó chưa hoàn tất.")
             return
 
-        results = scan_targets(self.targets)
-        log_scan_results(results, self.logger)
+        self._thread_result = None
+        self._thread_error = None
+        self._set_busy(True, busy_text)
 
-        for r in results:
-            self.scan_results[r.target.id] = r
+        def _job() -> None:
+            try:
+                self._thread_result = worker()
+            except Exception as e:  # noqa: BLE001
+                self._thread_error = str(e)
 
-        inserted = 0
-        for r in results:
-            t = r.target
+        thread = threading.Thread(target=_job, daemon=True)
+        thread.start()
+
+        def _poll() -> None:
+            if thread.is_alive():
+                self.root.after(80, _poll)
+                return
+            self._set_busy(False)
+            if self._thread_error:
+                messagebox.showerror("Lỗi", self._thread_error)
+                self.status_var.set("Có lỗi trong quá trình xử lý.")
+                return
+            on_done(self._thread_result)
+
+        self.root.after(80, _poll)
+
+    def _refresh_tree(self) -> None:
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+
+        for t in self.targets:
+            r = self.scan_results.get(t.id)
+            total = self._fmt_gb(r.total_bytes) if r else "-"
+            reclaim = self._fmt_gb(r.estimated_reclaimable) if r else "-"
+            files = str(r.file_count) if r else "-"
+
+            check_mark = DISABLED
             if self._is_actionable(t, r):
-                self.checked.add(t.id)
+                check_mark = CHECKED if t.id in self.checked else UNCHECKED
 
-            check_mark = self._check_mark_for(t)
-            reclaim = self._fmt_gb(r.estimated_reclaimable) if r.is_reclaimable else "-"
-            tags = ()
+            tags: list[str] = []
             if t.safety == Safety.CAUTION:
-                tags = ("caution",)
-            elif t.safety == Safety.DANGEROUS:
-                tags = ("dangerous",)
-            elif r.is_reclaimable:
-                tags = ("reclaimable",)
+                tags.append("caution")
+            if t.safety == Safety.DANGEROUS:
+                tags.append("dangerous")
+            if r and r.estimated_reclaimable > 0:
+                tags.append("reclaimable")
 
             self.tree.insert(
-                "", tk.END,
+                "",
+                tk.END,
                 iid=t.id,
                 values=(
                     check_mark,
                     t.id,
-                    self._fmt_gb(r.total_bytes),
+                    total,
                     reclaim,
-                    r.file_count,
+                    files,
                     t.safety.value,
                     t.action.value,
                     t.note,
                 ),
-                tags=tags,
+                tags=tuple(tags),
             )
-            inserted += 1
 
-        s = summarize(results)
-        self.status_var.set(
-            f"Quét xong: {inserted} mục, tổng {self._fmt_gb(s['total_bytes'])}, "
-            f"có thể giải phóng {self._fmt_gb(s['estimated_reclaimable'])}."
-        )
-        self._append_log(self.status_var.get())
-        if skipped:
-            self._append_log(f"Có {len(skipped)} mục bị skip (không tồn tại hoặc không hợp lệ).")
+    def _get_selected_targets(self) -> list[Target]:
+        selected_ids = self.checked.copy()
+        return [t for t in self.targets if t.id in selected_ids]
 
-    def _check_mark_for(self, target: Target) -> str:
-        if not self._can_check(target):
-            return DISABLED
-        return CHECKED if target.id in self.checked else UNCHECKED
+    # ---------- Scan ----------
+    def on_scan(self) -> None:
+        def _worker():
+            targets, skipped = load_targets(only_valid=False)
+            results = scan_targets(targets)
+            return targets, skipped, results
+
+        def _done(payload) -> None:
+            targets, skipped, results = payload
+            self.targets = targets
+            self.scan_results = {r.target.id: r for r in results}
+            target_by_id = {t.id: t for t in self.targets}
+
+            # Giữ lại các mục checked còn hợp lệ sau khi scan lại
+            self.checked = {
+                tid for tid in self.checked
+                if tid in self.scan_results
+                and tid in target_by_id
+                and self._is_actionable(target_by_id[tid], self.scan_results.get(tid))
+            }
+
+            self._refresh_tree()
+
+            summary = summarize(results)
+            self.status_var.set(
+                f"Đã quét {len(results)} mục | "
+                f"Tổng: {self._fmt_gb(summary['total_bytes'])} | "
+                f"Ước tính/tiềm năng: {self._fmt_gb(summary['estimated_reclaimable'])}"
+            )
+            self._set_log_line(
+                f"Scan xong: {len(results)} mục, lỗi: {summary['errors']}"
+            )
+            self.detail_btn.configure(state=tk.NORMAL)
+
+            if skipped:
+                self.logger.warning("Có %s target không hợp lệ trong config", len(skipped))
+            log_scan_results(results, self.logger)
+
+        self._run_background(_worker, _done, "Đang quét...")
 
     # ---------- Checkbox ----------
-
-    def on_tree_click(self, event: tk.Event) -> None:
+    def on_tree_click(self, event) -> None:
         region = self.tree.identify("region", event.x, event.y)
-        if region != "cell":
-            return
         column = self.tree.identify_column(event.x)
-        if column != "#1":
-            return
-        row_id = self.tree.identify_row(event.y)
-        if not row_id:
-            return
-        target = next((t for t in self.targets if t.id == row_id), None)
-        if target is None or not self._can_check(target):
+        item = self.tree.identify_row(event.y)
+
+        if region != "cell" or column != "#1" or not item:
             return
 
-        if target.id in self.checked:
-            self.checked.discard(target.id)
+        target = next((t for t in self.targets if t.id == item), None)
+        result = self.scan_results.get(item)
+        if target is None or not self._is_actionable(target, result):
+            return
+
+        if item in self.checked:
+            self.checked.remove(item)
         else:
-            self.checked.add(target.id)
-        self._refresh_check_cell(target.id)
+            self.checked.add(item)
 
-    def _refresh_check_cell(self, target_id: str) -> None:
-        target = next((t for t in self.targets if t.id == target_id), None)
-        if target is None:
-            return
-        values = list(self.tree.item(target_id, "values"))
-        values[0] = self._check_mark_for(target)
-        self.tree.item(target_id, values=values)
+        self._refresh_tree()
+        self._set_log_line(f"Đã chọn {len(self.checked)} mục.")
 
     def on_select_all(self) -> None:
         for t in self.targets:
             r = self.scan_results.get(t.id)
             if self._is_actionable(t, r):
                 self.checked.add(t.id)
-                self._refresh_check_cell(t.id)
+        self._refresh_tree()
+        self._set_log_line(f"Đã chọn tất cả ({len(self.checked)} mục).")
 
     def on_clear_all(self) -> None:
         self.checked.clear()
-        for t in self.targets:
-            self._refresh_check_cell(t.id)
+        self._refresh_tree()
+        self._set_log_line("Đã bỏ chọn tất cả.")
 
     # ---------- Clean ----------
+    def _run_clean(self, dry_run: bool) -> None:
+        selected = self._get_selected_targets()
+        if not selected:
+            messagebox.showinfo("Chưa chọn", "Vui lòng chọn ít nhất 1 mục SAFE để dọn.")
+            return
 
-    def _selected_targets(self) -> list[Target]:
-        return [t for t in self.targets if t.id in self.checked]
+        if not dry_run:
+            answer = messagebox.askyesno(
+                "Xác nhận",
+                f"Bạn sắp xóa dữ liệu ở {len(selected)} mục đã chọn. Tiếp tục?",
+                icon="warning",
+            )
+            if not answer:
+                return
+
+        def _worker():
+            return execute_targets(selected, dry_run=dry_run)
+
+        def _done(results: list[ActionResult]) -> None:
+            self.last_action_results = results
+            self.last_action_dry_run = dry_run
+            log_action_results(results, dry_run=dry_run, logger=self.logger)
+
+            total = sum(r.reclaimed_bytes for r in results)
+            planned = sum(r.planned_bytes for r in results)
+
+            if dry_run:
+                self.status_var.set(
+                    f"Dry-run xong | Dự kiến: {self._fmt_gb(planned)}"
+                )
+                self._set_log_line("Dry-run hoàn tất.")
+            else:
+                self.status_var.set(
+                    f"Clean xong | Đã giải phóng: {self._fmt_gb(total)}"
+                )
+                self._set_log_line("Clean execute hoàn tất.")
+                # Sau khi xóa thật, scan lại để cập nhật giao diện
+                self.on_scan()
+
+            self.detail_btn.configure(state=tk.NORMAL)
+
+        title = "Đang lập kế hoạch dọn (dry-run)..." if dry_run else "Đang xóa..."
+        self._run_background(_worker, _done, title)
 
     def on_clean_dry(self) -> None:
-        selected = self._selected_targets()
-        if not selected:
-            messagebox.showinfo("Dry-run", "Chưa chọn mục nào.")
-            return
-        self.status_var.set("Đang chạy dry-run...")
-        self.root.update_idletasks()
-        results = execute_targets(selected, dry_run=True)
-        log_action_results(results, dry_run=True, logger=self.logger)
-        self._show_action_results(results, dry_run=True)
+        self._run_clean(dry_run=True)
 
     def on_clean_execute(self) -> None:
-        selected = self._selected_targets()
-        if not selected:
-            messagebox.showinfo("Clean", "Chưa chọn mục nào.")
-            return
+        self._run_clean(dry_run=False)
 
-        self.status_var.set("Đang lên kế hoạch...")
-        self.root.update_idletasks()
+    # ---------- Details ----------
+    def on_show_details(self) -> None:
+        win = tk.Toplevel(self.root)
+        win.title("Chi tiết kết quả")
+        win.geometry("760x420")
 
-        dry = execute_targets(selected, dry_run=True)
-        actionable = [r for r in dry if r.status == ActionStatus.PLANNED and r.planned_bytes > 0]
-        if not actionable:
-            messagebox.showinfo("Clean", "Không có gì để xóa trong các mục đã chọn.")
-            self.status_var.set("Không có gì để xóa.")
-            return
+        text = tk.Text(win, wrap=tk.WORD, padx=10, pady=10)
+        scroll = ttk.Scrollbar(win, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        total = sum(r.planned_bytes for r in actionable)
-        detail = "\n".join(f"  - {r.target.id}: {self._fmt_gb(r.planned_bytes)}" for r in actionable)
-        confirm = messagebox.askyesno(
-            "Xác nhận xóa",
-            f"Sẽ xóa {len(actionable)} mục, tổng {self._fmt_gb(total)}:\n\n{detail}\n\nTiếp tục?",
-            icon="warning",
-        )
-        if not confirm:
-            self._append_log("Đã hủy xóa.")
-            self.status_var.set("Đã hủy.")
-            return
+        if self.last_action_results:
+            mode = "DRY-RUN" if self.last_action_dry_run else "EXECUTE"
+            text.insert(tk.END, f"KẾT QUẢ CLEAN ({mode})\n")
+            text.insert(tk.END, "-" * 60 + "\n")
+            for r in self.last_action_results:
+                text.insert(
+                    tk.END,
+                    f"[{r.status.value}] {r.target.id}: {r.message}\n"
+                )
+                for err in r.errors:
+                    text.insert(tk.END, f"  - {err}\n")
+            total_plan = sum(r.planned_bytes for r in self.last_action_results)
+            total_real = sum(r.reclaimed_bytes for r in self.last_action_results)
+            text.insert(tk.END, "\n")
+            text.insert(tk.END, f"Tổng dự kiến: {self._fmt_gb(total_plan)}\n")
+            text.insert(tk.END, f"Tổng giải phóng: {self._fmt_gb(total_real)}\n")
+        elif self.scan_results:
+            results = list(self.scan_results.values())
+            s = summarize(results)
+            text.insert(tk.END, "KẾT QUẢ SCAN\n")
+            text.insert(tk.END, "-" * 60 + "\n")
+            text.insert(tk.END, f"Tổng dung lượng: {self._fmt_gb(s['total_bytes'])}\n")
+            text.insert(
+                tk.END,
+                f"Ước tính/tiềm năng: {self._fmt_gb(s['estimated_reclaimable'])}\n"
+            )
+            text.insert(tk.END, f"Số mục lỗi: {s['errors']}\n")
+        else:
+            text.insert(tk.END, "Chưa có dữ liệu. Hãy chạy Scan trước.\n")
 
-        self.status_var.set("Đang xóa...")
-        self.root.update_idletasks()
-
-        real = execute_targets(selected, dry_run=False)
-        log_action_results(real, dry_run=False, logger=self.logger)
-        self._show_action_results(real, dry_run=False)
-
-        self.on_scan()
-
-    def _show_action_results(self, results: list[ActionResult], dry_run: bool) -> None:
-        mode = "DRY-RUN" if dry_run else "THỰC THI"
-        self._append_log(f"--- KẾT QUẢ ({mode}) ---")
-        total_reclaimed = 0
-        total_planned = 0
-        for r in results:
-            total_reclaimed += r.reclaimed_bytes
-            total_planned += r.planned_bytes
-            self._append_log(f"  [{r.status.value}] {r.target.id}: {r.message}")
-            for err in r.errors[:3]:
-                self._append_log(f"      └─ {err}")
-            if len(r.errors) > 3:
-                self._append_log(f"      └─ ... và {len(r.errors) - 3} lỗi khác")
-        self._append_log(
-            f"  Tổng dự kiến: {self._fmt_gb(total_planned)} | "
-            f"Tổng giải phóng: {self._fmt_gb(total_reclaimed)}"
-        )
-        self.status_var.set(
-            f"{mode}: dự kiến {self._fmt_gb(total_planned)}, "
-            f"giải phóng {self._fmt_gb(total_reclaimed)}."
-        )
+        text.configure(state=tk.DISABLED)
 
 
 def main() -> None:

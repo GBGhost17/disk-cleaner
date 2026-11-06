@@ -48,7 +48,7 @@ PROTECTED_ROOTS = [
     Path("C:/Program Files"),
     Path("C:/Program Files (x86)"),
     Path("C:/ProgramData"),
-    Path("C:/Users"),
+    # Path("C:/Users"),
 ]
 
 
@@ -65,12 +65,22 @@ def is_path_within_target(candidate: Path, target_root: Path) -> bool:
 
 
 def is_protected_root(candidate: Path) -> bool:
-    """
-    Kiểm tra candidate có phải là (hoặc nằm trực tiếp trong) thư mục gốc được bảo vệ.
-    Trả về True nếu candidate trùng khớp chính xác với một trong các PROTECTED_ROOTS.
+    r"""
+    Kiểm tra candidate có phải là thư mục gốc được bảo vệ,
+    HOẶC nằm bên trong bất kỳ thư mục gốc được bảo vệ nào.
+    Ví dụ: C:\Program Files\SomeApp -> True (vì nằm trong C:\Program Files).
     """
     resolved = candidate.resolve(strict=False)
-    return any(resolved == root.resolve(strict=False) for root in PROTECTED_ROOTS)
+    for root in PROTECTED_ROOTS:
+        root_resolved = root.resolve(strict=False)
+        if resolved == root_resolved or root_resolved in resolved.parents:
+            return True
+    return False
+
+def is_volume_root(candidate: Path) -> bool:
+    r"""Kiểm tra candidate có phải là ổ đĩa gốc không (C:\, D:\...)."""
+    resolved = candidate.resolve(strict=False)
+    return resolved.parent == resolved
 
 
 def is_symlink_or_junction(candidate: Path) -> bool:
@@ -90,10 +100,6 @@ def is_symlink_or_junction(candidate: Path) -> bool:
 
 
 def validate_target(target: Target) -> tuple[bool, str]:
-    """
-    Kiểm tra một Target có hợp lệ để xử lý không.
-    Trả về (ok, message). Không thực hiện xóa.
-    """
     resolved = target.resolved_path()
 
     if not resolved.exists():
@@ -102,18 +108,17 @@ def validate_target(target: Target) -> tuple[bool, str]:
     if is_symlink_or_junction(resolved):
         return False, f"Đường dẫn là symlink/junction, từ chối xử lý: {resolved}"
 
+    if is_volume_root(resolved):
+        return False, f"Từ chối xóa ổ đĩa gốc: {resolved}"
+
     if is_protected_root(resolved):
-        return False, f"Đường dẫn là thư mục gốc được bảo vệ: {resolved}"
+        return False, f"Đường dẫn nằm trong khu vực được bảo vệ: {resolved}"
 
     if target.safety == Safety.DANGEROUS:
         return False, f"Mục tiêu được đánh dấu dangerous, không xử lý: {target.id}"
 
-    # delete_contents và delete_folder yêu cầu target phải là thư mục
     if target.action in (Action.DELETE_CONTENTS, Action.DELETE_FOLDER):
         if not resolved.is_dir():
-            return False, (
-                f"Action {target.action.value} yêu cầu thư mục, "
-                f"nhưng target là tệp: {resolved}"
-            )
+            return False, f"Action {target.action.value} yêu cầu thư mục, nhưng target là tệp: {resolved}"
 
     return True, "OK"

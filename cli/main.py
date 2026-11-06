@@ -52,7 +52,7 @@ def _print_summary(results: list[ScanResult]) -> None:
     print()
     print("TỔNG HỢP:")
     print(f"  Tổng dung lượng quét:        {_fmt_gb(s['total_bytes'])}")
-    print(f"  Có thể giải phóng thực tế:   {_fmt_gb(s['estimated_reclaimable'])}")
+    print(f"  Có thể giải phóng ước tính/tiềm năng: {_fmt_gb(s['estimated_reclaimable'])}")
     print()
     for safety, data in s["by_safety"].items():
         if data["count"] > 0:
