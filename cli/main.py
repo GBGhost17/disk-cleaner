@@ -87,6 +87,8 @@ def _print_action_results(results: list[ActionResult], dry_run: bool) -> None:
             ActionStatus.FAILED: "✗",
         }.get(r.status, "?")
         print(f"  {status_icon} {r.target.id:<32} {r.message}")
+        if r.skipped_locked:
+            print(f"      └─ Bỏ qua {r.skipped_locked} tệp đang được sử dụng")
         for err in r.errors[:3]:
             print(f"      └─ {err}")
         if len(r.errors) > 3:

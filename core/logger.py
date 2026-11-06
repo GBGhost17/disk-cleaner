@@ -76,6 +76,10 @@ def log_action_results(results: list[ActionResult], dry_run: bool, logger: loggi
         logger.info(
             f"  {r.target.id}: [{r.status.value}] {r.message}"
         )
+        if r.skipped_locked:
+            logger.info(f"    - skipped_locked={r.skipped_locked}")
+        for locked in r.locked_details:
+            logger.info(f"    - LOCKED: {locked}")
         for err in r.errors:
             logger.warning(f"    - {err}")
     logger.info(f"  TOTAL planned: {round(total_planned / 1024 / 1024 / 1024, 2)}GB")

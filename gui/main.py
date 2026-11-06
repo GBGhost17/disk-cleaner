@@ -365,6 +365,11 @@ class DiskCleanerGUI:
                     tk.END,
                     f"[{r.status.value}] {r.target.id}: {r.message}\n"
                 )
+                if r.skipped_locked:
+                    text.insert(
+                        tk.END,
+                        f"  - Bỏ qua {r.skipped_locked} tệp đang được sử dụng\n"
+                    )
                 for err in r.errors:
                     text.insert(tk.END, f"  - {err}\n")
             total_plan = sum(r.planned_bytes for r in self.last_action_results)

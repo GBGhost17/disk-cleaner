@@ -13,6 +13,7 @@ Nguyên tắc cứng:
 from __future__ import annotations
 
 import os
+import errno
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -48,7 +49,9 @@ class ActionResult:
     reclaimed_bytes: int = 0
     deleted_files: int = 0
     failed_files: int = 0
+    skipped_locked: int = 0
     errors: list[str] = field(default_factory=list)
+    locked_details: list[str] = field(default_factory=list)
     message: str = ""
 
     @property
@@ -98,25 +101,36 @@ def _measure_path(path: Path) -> int:
     return total
 
 
-def _delete_file(fp: Path, dry_run: bool) -> tuple[bool, int, str | None]:
+def _is_locked_file_error(exc: BaseException) -> bool:
+    """True nếu lỗi thuộc nhóm file đang dùng/khóa (hành vi bình thường trên Windows)."""
+    if isinstance(exc, PermissionError):
+        return True
+    winerror = getattr(exc, "winerror", None)
+    if winerror == 32:  # ERROR_SHARING_VIOLATION
+        return True
+    err_no = getattr(exc, "errno", None)
+    return err_no in (errno.EACCES, errno.EPERM)
+
+
+def _delete_file(fp: Path, dry_run: bool) -> tuple[bool, int, str | None, bool]:
     """
-    Xóa một tệp. Trả về (ok, bytes, error).
+    Xóa một tệp. Trả về (ok, bytes, error, is_locked).
     Nếu dry_run=True, không xóa, chỉ đo.
     """
     try:
         st = fp.lstat()
         size = st.st_size
     except OSError as e:
-        return False, 0, f"lstat failed: {e}"
+        return False, 0, f"lstat failed: {e}", _is_locked_file_error(e)
 
     if dry_run:
-        return True, size, None
+        return True, size, None, False
 
     try:
         fp.unlink()
-        return True, size, None
+        return True, size, None, False
     except (OSError, PermissionError) as e:
-        return False, 0, f"unlink failed: {e}"
+        return False, 0, f"unlink failed: {e}", _is_locked_file_error(e)
 
 
 def _execute_delete_contents(target: Target, resolved: Path, dry_run: bool) -> ActionResult:
@@ -142,14 +156,19 @@ def _execute_delete_contents(target: Target, resolved: Path, dry_run: bool) -> A
             if not is_path_within_target(entry.resolve(strict=False), resolved):
                 result.errors.append(f"Bỏ qua tệp ngoài target root: {entry}")
                 continue
-            ok, size, err = _delete_file(entry, dry_run)
+            ok, size, err, is_locked = _delete_file(entry, dry_run)
             if ok:
                 result.reclaimed_bytes += size
                 result.deleted_files += 1
             else:
-                result.failed_files += 1
-                if err:
-                    result.errors.append(f"{entry}: {err}")
+                if is_locked:
+                    result.skipped_locked += 1
+                    if err:
+                        result.locked_details.append(f"{entry}: {err}")
+                else:
+                    result.failed_files += 1
+                    if err:
+                        result.errors.append(f"{entry}: {err}")
         elif entry.is_dir():
             # Duyệt đệ quy thư mục con, xóa từng tệp
             for dirpath, dirnames, filenames in os.walk(entry, topdown=True, onerror=None):
@@ -166,14 +185,19 @@ def _execute_delete_contents(target: Target, resolved: Path, dry_run: bool) -> A
                     if not is_path_within_target(fp.resolve(strict=False), resolved):
                         result.errors.append(f"Bỏ qua tệp ngoài target root: {fp}")
                         continue
-                    ok, size, err = _delete_file(fp, dry_run)
+                    ok, size, err, is_locked = _delete_file(fp, dry_run)
                     if ok:
                         result.reclaimed_bytes += size
                         result.deleted_files += 1
                     else:
-                        result.failed_files += 1
-                        if err:
-                            result.errors.append(f"{fp}: {err}")
+                        if is_locked:
+                            result.skipped_locked += 1
+                            if err:
+                                result.locked_details.append(f"{fp}: {err}")
+                        else:
+                            result.failed_files += 1
+                            if err:
+                                result.errors.append(f"{fp}: {err}")
 
             if not dry_run:
                 # Xóa thư mục con nếu rỗng (không xóa resolved)
@@ -190,6 +214,7 @@ def _execute_delete_contents(target: Target, resolved: Path, dry_run: bool) -> A
     result.message = (
         f"{'[DRY-RUN] ' if dry_run else ''}"
         f"Xóa {result.deleted_files} tệp, {result.reclaimed_gb} GB"
+        + (f", bỏ qua {result.skipped_locked} tệp đang được sử dụng" if result.skipped_locked else "")
         + (f", {result.failed_files} lỗi" if result.failed_files else "")
     )
     return result
@@ -229,14 +254,19 @@ def _execute_delete_folder(target: Target, resolved: Path, dry_run: bool) -> Act
             if not is_path_within_target(fp.resolve(strict=False), resolved):
                 result.errors.append(f"Bỏ qua tệp ngoài target root: {fp}")
                 continue
-            ok, size, err = _delete_file(fp, dry_run)
+            ok, size, err, is_locked = _delete_file(fp, dry_run)
             if ok:
                 result.reclaimed_bytes += size
                 result.deleted_files += 1
             else:
-                result.failed_files += 1
-                if err:
-                    result.errors.append(f"{fp}: {err}")
+                if is_locked:
+                    result.skipped_locked += 1
+                    if err:
+                        result.locked_details.append(f"{fp}: {err}")
+                else:
+                    result.failed_files += 1
+                    if err:
+                        result.errors.append(f"{fp}: {err}")
 
     if not dry_run:
         rmdir_errors = 0
@@ -271,6 +301,7 @@ def _execute_delete_folder(target: Target, resolved: Path, dry_run: bool) -> Act
     result.message = (
         f"{'[DRY-RUN] ' if dry_run else ''}"
         f"Xóa thư mục {resolved.name}: {result.deleted_files} tệp, {result.reclaimed_gb} GB"
+        + (f", bỏ qua {result.skipped_locked} tệp đang được sử dụng" if result.skipped_locked else "")
         + (f", {result.failed_files} lỗi" if result.failed_files else "")
     )
     return result
