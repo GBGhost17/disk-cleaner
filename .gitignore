@@ -5,3 +5,8 @@ logs/
 config/targets.local.json
 .venv/
 venv/
+
+# PyInstaller
+build/
+dist/
+*.spec

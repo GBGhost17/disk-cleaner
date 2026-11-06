@@ -49,7 +49,7 @@ def _print_summary(results: list[ScanResult]) -> None:
     for safety, data in s["by_safety"].items():
         if data["count"] > 0:
             print(
-                f"  {safety.value:<10} {data['count']:>2} mục  "
+                f"  {safety.value:<10} {data['count']:>2} targets  "
                 f"reclaimable={_fmt_gb(data['reclaimable']):>10}  "
                 f"total={_fmt_gb(data['bytes']):>10}"
             )
