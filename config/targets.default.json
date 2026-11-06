@@ -7,15 +7,31 @@
       "category": "temp",
       "safety": "safe",
       "action": "delete_contents",
-      "note": "Thư mục tạm người dùng, xóa an toàn"
+      "note": "Temp của user hiện tại, an toàn để dọn"
     },
     {
-      "id": "windows_temp",
-      "path": "C:\\Windows\\Temp",
+      "id": "localappdata_temp",
+      "path": "%LOCALAPPDATA%\\Temp",
       "category": "temp",
       "safety": "safe",
       "action": "delete_contents",
-      "note": "Temp hệ thống, một số tệp đang dùng sẽ bỏ qua"
+      "note": "Temp ứng dụng theo user, thường có thể dọn"
+    },
+    {
+      "id": "wer_local_reports",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\WER",
+      "category": "windows_cache",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "Báo cáo lỗi cục bộ (Windows Error Reporting)"
+    },
+    {
+      "id": "explorer_thumbnail_cache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer",
+      "category": "windows_cache",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "Thumb cache Explorer, Windows sẽ tự tạo lại"
     },
     {
       "id": "chrome_cache",
@@ -26,6 +42,22 @@
       "note": "Cache Chrome, tự tạo lại"
     },
     {
+      "id": "chrome_code_cache",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Code Cache",
+      "category": "browser_cache",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "Code cache Chrome"
+    },
+    {
+      "id": "chrome_gpu_cache",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\GPUCache",
+      "category": "browser_cache",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "GPU cache Chrome"
+    },
+    {
       "id": "edge_cache",
       "path": "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\Cache",
       "category": "browser_cache",
@@ -34,20 +66,52 @@
       "note": "Cache Edge, tự tạo lại"
     },
     {
-      "id": "winsxs_cleanup",
+      "id": "edge_code_cache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\Code Cache",
+      "category": "browser_cache",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "Code cache Edge"
+    },
+    {
+      "id": "edge_gpu_cache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\GPUCache",
+      "category": "browser_cache",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "GPU cache Edge"
+    },
+    {
+      "id": "microsoft_teams_cache",
+      "path": "%LOCALAPPDATA%\\Packages\\MSTeams_8wekyb3d8bbwe\\LocalCache",
+      "category": "app_cache",
+      "safety": "safe",
+      "action": "delete_contents",
+      "note": "Cache Microsoft Teams (nếu có)"
+    },
+    {
+      "id": "downloads_review",
+      "path": "%USERPROFILE%\\Downloads",
+      "category": "manual_review",
+      "safety": "caution",
+      "action": "manual_review",
+      "note": "Xem thủ công file tải về cũ, không tự động xóa"
+    },
+    {
+      "id": "desktop_review",
+      "path": "%USERPROFILE%\\Desktop",
+      "category": "manual_review",
+      "safety": "caution",
+      "action": "manual_review",
+      "note": "Xem thủ công tệp cũ trên Desktop, không tự động xóa"
+    },
+    {
+      "id": "winsxs_cleanup_manual",
       "path": "C:\\Windows\\WinSxS",
       "category": "system",
       "safety": "caution",
       "action": "dism_cleanup",
-      "note": "Chỉ dọn qua DISM StartComponentCleanup, không xóa thủ công"
-    },
-    {
-      "id": "software_distribution",
-      "path": "C:\\Windows\\SoftwareDistribution\\Download",
-      "category": "system",
-      "safety": "caution",
-      "action": "manual_review",
-      "note": "Cần dừng Windows Update trước khi xóa"
+      "note": "Gợi ý chạy DISM StartComponentCleanup thủ công; không xóa trực tiếp WinSxS"
     },
     {
       "id": "windows_system32",
@@ -55,15 +119,7 @@
       "category": "system",
       "safety": "dangerous",
       "action": "never_touch",
-      "note": "Thành phần cốt lõi, không bao giờ xóa"
-    },
-    {
-      "id": "windows_installer",
-      "path": "C:\\Windows\\Installer",
-      "category": "system",
-      "safety": "dangerous",
-      "action": "never_touch",
-      "note": "Bộ cài phần mềm, không xóa thủ công"
+      "note": "Nhắc nhở vùng hệ thống nguy hiểm, không bao giờ xử lý"
     },
     {
       "id": "program_files",
@@ -71,7 +127,7 @@
       "category": "system",
       "safety": "dangerous",
       "action": "never_touch",
-      "note": "Chỉ gỡ qua Settings, không xóa thư mục"
+      "note": "Nhắc nhở: chỉ gỡ app qua Settings, không xóa thư mục"
     },
     {
       "id": "program_files_x86",
@@ -79,15 +135,7 @@
       "category": "system",
       "safety": "dangerous",
       "action": "never_touch",
-      "note": "Chỉ gỡ qua Settings, không xóa thư mục"
-    },
-    {
-      "id": "windows_folder",
-      "path": "C:\\Windows",
-      "category": "system",
-      "safety": "dangerous",
-      "action": "never_touch",
-      "note": "Thư mục hệ thống, không xóa thủ công"
+      "note": "Nhắc nhở: chỉ gỡ app qua Settings, không xóa thư mục"
     },
     {
       "id": "program_data",
@@ -95,7 +143,7 @@
       "category": "system",
       "safety": "dangerous",
       "action": "never_touch",
-      "note": "Dữ liệu ứng dụng, không xóa thủ công"
+      "note": "Dữ liệu ứng dụng dùng chung, không xóa thủ công"
     }
   ]
 }

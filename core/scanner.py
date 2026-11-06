@@ -101,6 +101,19 @@ def scan_target(target: Target) -> ScanResult:
             error="Đường dẫn không tồn tại",
         )
 
+    # Với action không reclaimable, chỉ cần xác nhận tồn tại để hiển thị trong UI/CLI.
+    # Không quét đệ quy để tránh chậm và số liệu nhiễu (ví dụ WinSxS cho DISM suggestion).
+    if target.action not in _RECLAIMABLE_ACTIONS:
+        return ScanResult(
+            target=target,
+            resolved_path=resolved,
+            exists=True,
+            total_bytes=0,
+            file_count=0,
+            dir_count=0,
+            error=None,
+        )
+
     if resolved.is_file():
         try:
             size = resolved.lstat().st_size

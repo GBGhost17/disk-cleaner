@@ -14,9 +14,11 @@ Tool này chạm vào hệ thống tệp, nên mọi hành động đều tuân 
 2. **`dangerous` bị chặn ở tầng code**, không chỉ dựa vào config. Kể cả khi ai đó sửa `targets.json`, tool vẫn từ chối xử lý.
 3. **Dry-run mặc định**: mọi hành động xóa đều hiển thị trước những gì sẽ xóa, chỉ thực thi khi người dùng xác nhận.
 4. **Kiểm tra symlink/junction**: từ chối xóa nếu đường dẫn là symlink hoặc junction, tránh xóa nhầm thư mục đích.
-5. **Bảo vệ thư mục gốc**: `C:\Windows`, `C:\Program Files`, `C:\ProgramData`, `C:\Users` không bao giờ bị xóa, kể cả khi được khai báo trong config.
-6. **Log mọi hành động**: ghi vào `logs/YYYY-MM-DD.log` trước và sau khi xóa.
-7. **Không xóa thư mục gốc**: `delete_contents` chỉ xóa nội dung bên trong, giữ thư mục. `delete_folder` chỉ xóa thư mục cụ thể, không xóa cha.
+5. **Bảo vệ vùng hệ thống**: chặn cả đường dẫn gốc và đường dẫn con nằm trong các vùng bảo vệ (`C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`, `C:\ProgramData`).
+6. **Bảo vệ volume root**: từ chối `C:\`, `D:\`... để tránh wipe nhầm ổ đĩa.
+7. **Log mọi hành động**: ghi vào `logs/YYYY-MM-DD.log` trước và sau khi xóa.
+8. **Không xóa thư mục gốc**: `delete_contents` chỉ xóa nội dung bên trong, giữ thư mục. `delete_folder` chỉ xóa thư mục cụ thể, không xóa cha.
+9. **File đang bị khóa (WinError 32 / PermissionError)**: được xem là hành vi bình thường trên Windows, được tách riêng thành nhóm `skipped_locked` để không gây nhiễu lỗi nghiêm trọng.
 
 ## Kiến trúc
 
@@ -25,13 +27,15 @@ disk-cleaner/
 ├── core/ # Lõi xử lý, dùng chung cho CLI và GUI
 │ ├── models.py # Dataclass Target, enum Safety/Action, hàm kiểm tra an toàn
 │ ├── config.py # Đọc và gộp targets.default.json + targets.local.json
-│ ├── scanner.py # Quét dung lượng thư mục (chưa viết)
-│ ├── actions.py # Thực thi hành động xóa (chưa viết)
-│ └── logger.py # Ghi log (chưa viết)
+│ ├── scanner.py # Quét dung lượng thư mục
+│ ├── actions.py # Thực thi hành động xóa + phân loại lỗi locked
+│ └── logger.py # Ghi log scan/clean
 ├── cli/
-│ └── main.py # Giao diện dòng lệnh (chưa viết)
+│ └── main.py # Giao diện dòng lệnh
 ├── gui/
-│ └── main.py # Giao diện đồ họa Tkinter (chưa viết)
+│ ├── main.py # Giao diện đồ họa Tkinter
+│ ├── constants.py # Hằng số GUI
+│ └── help_text.py # Nội dung tab Help
 ├── config/
 │ ├── targets.default.json # Bản chung, public cho mọi người
 │ └── targets.local.json # Bản cá nhân, không public (.gitignore)
@@ -78,24 +82,38 @@ python --version
 
 ## Sử dụng
 
-### CLI (chưa hoàn thiện)
+### CLI
 
 ```powershell
 python -m cli.main scan            # Quét và hiển thị dung lượng
 python -m cli.main scan --verbose  # Hiển thị cả mục bị skip và lý do
 python -m cli.main clean --dry-run # Xem trước sẽ xóa gì
 python -m cli.main clean           # Xóa thật (có xác nhận)
+python -m cli.main clean --yes     # Xóa thật, bỏ qua xác nhận
 ```
 
-### GUI (chưa hoàn thiện)
+### GUI
 
 ```powershell
 python -m gui.main
 ```
 
+GUI hỗ trợ:
+
+- Scan nền bằng thread (tránh đơ UI).
+- Chọn/bỏ chọn mục `safe` có thể dọn.
+- Clean dry-run / execute.
+- Hộp thoại chi tiết kết quả.
+
 ## Phát triển
 
 Chạy kiểm tra cú pháp
+
+```powershell
+python -m py_compile core\models.py core\config.py core\scanner.py core\actions.py core\logger.py cli\main.py gui\main.py
+```
+
+Kiểm tra nhanh config
 
 ```powershell
 python -c "from core.config import load_targets; v, s = load_targets(only_valid=False); print(f'valid={len(v)}, skipped={len(s)}')"
@@ -106,6 +124,14 @@ Thêm mục tiêu mới
 1. Mở config/targets.local.json (hoặc targets.default.json nếu là mục phổ quát).
 2. Thêm object mới vào mảng targets, đảm bảo đủ trường bắt buộc.
 3. Chạy lại lệnh kiểm tra để xác nhận target được nhận diện.
+
+## Hiển thị lỗi file đang dùng (Windows)
+
+- Khi gặp file đang bị ứng dụng khác giữ (`WinError 32`, `PermissionError`), tool sẽ:
+  - **không** coi là lỗi nghiêm trọng,
+  - tăng bộ đếm `skipped_locked`,
+  - hiển thị gọn: “Bỏ qua X tệp đang được sử dụng”.
+- Chi tiết từng file bị khóa vẫn được ghi vào log để tra cứu.
 
 ## Quy ước code
 

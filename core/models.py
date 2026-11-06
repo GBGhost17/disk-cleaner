@@ -108,6 +108,12 @@ def validate_target(target: Target) -> tuple[bool, str]:
     if is_symlink_or_junction(resolved):
         return False, f"Đường dẫn là symlink/junction, từ chối xử lý: {resolved}"
 
+    # Ngoại lệ UX an toàn:
+    # DISM cleanup là hành động không xóa trực tiếp bằng tool,
+    # nên cho phép hiển thị cả khi path nằm trong protected root.
+    if target.action == Action.DISM_CLEANUP:
+        return True, "OK"
+
     if is_volume_root(resolved):
         return False, f"Từ chối xóa ổ đĩa gốc: {resolved}"
 
